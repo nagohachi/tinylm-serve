@@ -225,7 +225,7 @@ export function App() {
                     <div className="empty">
                       <h2>{loadedModel?.name}</h2>
                       <p className="muted">
-                        ブラウザの中だけで動いています。入力した文章はどこにも送信されません。
+                        本モデルはブラウザの中だけで動作するので、会話が外部に送信されることはありません。
                       </p>
                       <div className="examples">
                         {EXAMPLES.map((ex) => (
@@ -347,11 +347,7 @@ function ModelPicker(props: {
   return (
     <div className="picker">
       <div className="picker-intro">
-        <h1>日本語の小さな言語モデルを、ブラウザで。</h1>
-        <p className="muted">
-          WebGPU を使って、モデルをこのブラウザの中で動かします。重みは Hugging Face
-          から一度だけダウンロードされ、次回からはブラウザのキャッシュから読み込まれます。
-        </p>
+        <h1>ちょっとアホな言語モデルとのチャットです</h1>
       </div>
       {props.error && <div className="banner error">{props.error}</div>}
       <div className="cards">
