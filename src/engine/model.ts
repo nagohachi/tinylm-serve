@@ -24,6 +24,8 @@ export interface ModelConfig {
   headDim: number;
   vocab: number;
   ropeTheta: number;
+  /** Llama 3 frequency scaling of RoPE, if the model uses it. */
+  ropeLlama3: null | { factor: number; lowFreqFactor: number; highFreqFactor: number; originalMaxPosition: number };
   eps: number;
   maxSeq: number;
   /** Dense MLP width (dense models). */
@@ -42,6 +44,9 @@ export function parseConfig(cfg: any): ModelConfig {
           sharedIntermediate: cfg.shared_expert_intermediate_size ?? 0,
         }
       : null;
+  const rope = cfg.rope_parameters ?? cfg.rope_scaling ?? null;
+  const ropeType = rope?.rope_type ?? rope?.type ?? "default";
+  if (ropeType !== "default" && ropeType !== "llama3") throw new Error(`Unsupported rope_type ${ropeType}`);
   return {
     hidden: cfg.hidden_size,
     layers: cfg.num_hidden_layers,
@@ -49,12 +54,52 @@ export function parseConfig(cfg: any): ModelConfig {
     kvHeads: cfg.num_key_value_heads ?? cfg.num_attention_heads,
     headDim: cfg.head_dim ?? cfg.hidden_size / cfg.num_attention_heads,
     vocab: cfg.vocab_size,
-    ropeTheta: cfg.rope_parameters?.rope_theta ?? cfg.rope_theta ?? 10000,
+    ropeTheta: rope?.rope_theta ?? cfg.rope_theta ?? 10000,
+    ropeLlama3:
+      ropeType === "llama3"
+        ? {
+            factor: rope.factor,
+            lowFreqFactor: rope.low_freq_factor,
+            highFreqFactor: rope.high_freq_factor,
+            originalMaxPosition: rope.original_max_position_embeddings,
+          }
+        : null,
     eps: cfg.rms_norm_eps ?? 1e-5,
     maxSeq: Math.min(cfg.max_position_embeddings ?? 2048, 2048),
     intermediate: cfg.intermediate_size,
     moe,
   };
+}
+
+const f32 = Math.fround;
+
+/**
+ * RoPE inverse frequencies, 1 / theta^(2i/d), with the optional Llama 3 scaling
+ * (same as HF `_compute_llama3_parameters`), each step rounded to fp32.
+ */
+export function ropeInvFreq(cfg: ModelConfig): Float32Array {
+  const half = cfg.headDim / 2;
+  const out = new Float32Array(half);
+  for (let j = 0; j < half; j++) {
+    const exponent = f32(f32(2 * j) / cfg.headDim);
+    out[j] = f32(1 / f32(cfg.ropeTheta ** exponent));
+  }
+  const s = cfg.ropeLlama3;
+  if (!s) return out;
+  const lowFreqWavelen = s.originalMaxPosition / s.lowFreqFactor;
+  const highFreqWavelen = s.originalMaxPosition / s.highFreqFactor;
+  for (let j = 0; j < half; j++) {
+    const invFreq = out[j];
+    const wavelen = f32(f32(2 * Math.PI) / invFreq);
+    const scaled = wavelen > lowFreqWavelen ? f32(invFreq / s.factor) : invFreq;
+    if (wavelen <= lowFreqWavelen && wavelen >= highFreqWavelen) {
+      const smooth = f32(f32(f32(s.originalMaxPosition / wavelen) - s.lowFreqFactor) / (s.highFreqFactor - s.lowFreqFactor));
+      out[j] = f32(f32(f32(f32(1 - smooth) * scaled) / s.factor) + f32(smooth * scaled));
+    } else {
+      out[j] = scaled;
+    }
+  }
+  return out;
 }
 
 interface LayerWeights {
@@ -146,7 +191,7 @@ export class TinyLM {
     opts: { onProgress?: (p: LoadProgress) => void; signal?: AbortSignal; chunk?: number } = {},
   ): Promise<TinyLM> {
     const cfg = parseConfig(configJson);
-    if (cfg.headDim !== 64) throw new Error("Only head_dim = 64 is supported");
+    if (cfg.headDim !== 64 && cfg.headDim !== 128) throw new Error(`Unsupported head_dim ${cfg.headDim}`);
     if (cfg.moe && (cfg.moe.experts > 16 || cfg.moe.topk > 8)) throw new Error("Unsupported MoE shape");
     const m = new TinyLM(device, cfg, opts.chunk ?? 256);
     const tensors = await readSafetensorsHeader(src, opts.signal);
@@ -299,12 +344,12 @@ export class TinyLM {
     this.logits = this.buf(cfg.vocab * 4, STORAGE | COPY_SRC, "logits");
     this.readback = this.buf(cfg.vocab * 4, MAP_READ | COPY_DST, "readback");
 
-    // RoPE table, computed like PyTorch in fp32: inv_freq = 1 / theta^(2i/d), angle = pos * inv_freq.
+    // RoPE table: angle = pos * inv_freq, computed in fp32 like PyTorch.
     const half = cfg.headDim / 2;
+    const invFreqs = ropeInvFreq(cfg);
     const table = new Float32Array(2 * cfg.maxSeq * half);
     for (let j = 0; j < half; j++) {
-      const exponent = Math.fround(Math.fround(2 * j) / cfg.headDim);
-      const invFreq = Math.fround(1 / Math.fround(cfg.ropeTheta ** exponent));
+      const invFreq = invFreqs[j];
       for (let pos = 0; pos < cfg.maxSeq; pos++) {
         const a = Math.fround(pos * invFreq);
         table[pos * half + j] = Math.cos(a);
@@ -448,7 +493,7 @@ export class TinyLM {
         new Uint32Array(u, 0, 7).set([T, cfg.heads, cfg.kvHeads, D, cfg.maxSeq, qkvW, attnW]);
         new Float32Array(u, 28, 1)[0] = 1 / Math.sqrt(D);
         add(
-          this.pipeline("attn", attentionShader),
+          this.pipeline(`attn:${D}`, attentionShader(D)),
           u,
           [[1, this.qkv], [2, L.kc], [3, L.vc], [4, this.attn], [5, this.state]],
           [cfg.heads, T, 1],

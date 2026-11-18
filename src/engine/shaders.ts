@@ -309,9 +309,15 @@ fn main(@builtin(global_invocation_id) g: vec3<u32>) {
 
 /**
  * Causal attention with GQA. One workgroup per (query token, head); scores for
- * all keys are kept in workgroup memory (maxSeq <= 2048). D must be 64.
+ * all keys are kept in workgroup memory (maxSeq <= 2048). D is the head dim
+ * (a divisor of 256: 64 or 128).
  */
-export const attentionShader = /* wgsl */ `
+export function attentionShader(D: number): string {
+  if (256 % D !== 0) throw new Error(`unsupported head_dim ${D}`);
+  const G = 256 / D; // thread groups that split the keys in the weighted sum
+  const sum = Array.from({ length: G }, (_, g) => `red[l.x + ${g * D}u]`).join(" + ");
+  return /* wgsl */ `
+const D = ${D}u;
 struct P { T: u32, nH: u32, nKV: u32, D: u32, maxSeq: u32, qkvStride: u32, outStride: u32, scale: f32 }
 @group(0) @binding(0) var<uniform> p: P;
 @group(0) @binding(1) var<storage, read> qkv: array<f32>;
@@ -321,21 +327,21 @@ struct P { T: u32, nH: u32, nKV: u32, D: u32, maxSeq: u32, qkvStride: u32, outSt
 @group(0) @binding(5) var<storage, read> st: array<u32>;
 var<workgroup> sc: array<f32, 2048>;
 var<workgroup> red: array<f32, 256>;
-var<workgroup> qs: array<f32, 64>;
+var<workgroup> qs: array<f32, ${D}>;
 @compute @workgroup_size(256)
 fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: vec3<u32>) {
   let h = wg.x;
   let t = wg.y;
   let kvh = h / (p.nH / p.nKV);
   let L = st[0] + t + 1u; // number of visible keys
-  if (l.x < 64u) { qs[l.x] = qkv[t * p.qkvStride + h * 64u + l.x]; }
+  if (l.x < D) { qs[l.x] = qkv[t * p.qkvStride + h * D + l.x]; }
   workgroupBarrier();
-  let kbase = kvh * p.maxSeq * 64u;
+  let kbase = kvh * p.maxSeq * D;
   var mx = -3.4e38;
   for (var s = l.x; s < L; s += 256u) {
     var d = 0.0;
-    let kb = kbase + s * 64u;
-    for (var i = 0u; i < 64u; i++) { d += qs[i] * kc[kb + i]; }
+    let kb = kbase + s * D;
+    for (var i = 0u; i < D; i++) { d += qs[i] * kc[kb + i]; }
     d *= p.scale;
     sc[s] = d;
     mx = max(mx, d);
@@ -362,21 +368,22 @@ fn main(@builtin(workgroup_id) wg: vec3<u32>, @builtin(local_invocation_id) l: v
   }
   let inv = 1.0 / red[0];
   workgroupBarrier();
-  // 4 groups of 64 threads split the keys; each thread owns one output dim.
-  let d = l.x % 64u;
-  let grp = l.x / 64u;
+  // ${G} groups of D threads split the keys; each thread owns one output dim.
+  let d = l.x % D;
+  let grp = l.x / D;
   var acc = 0.0;
-  for (var s = grp; s < L; s += 4u) {
-    acc += sc[s] * vc[kbase + s * 64u + d];
+  for (var s = grp; s < L; s += ${G}u) {
+    acc += sc[s] * vc[kbase + s * D + d];
   }
   red[l.x] = acc;
   workgroupBarrier();
-  if (l.x < 64u) {
-    let v = (red[l.x] + red[l.x + 64u] + red[l.x + 128u] + red[l.x + 192u]) * inv;
-    out[t * p.outStride + h * 64u + l.x] = v;
+  if (l.x < D) {
+    let v = (${sum}) * inv;
+    out[t * p.outStride + h * D + l.x] = v;
   }
 }
 `;
+}
 
 /** Top-k routing: softmax over the k largest router logits (Megatron pre_softmax=False). */
 export const topkShader = /* wgsl */ `
