@@ -132,7 +132,7 @@ export function useEngine() {
   );
 
   const stop = useCallback(() => send({ type: "stop" }), [send]);
-  const clearCache = useCallback(() => send({ type: "clearCache" }), [send]);
+  const clearCache = useCallback((repo?: string) => send({ type: "clearCache", repo }), [send]);
 
   return { load, cached, storage, loadModel, generate, stop, clearCache };
 }

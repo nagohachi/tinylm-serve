@@ -333,6 +333,22 @@ async function cacheStatus(repos: string[]) {
   post({ type: "cacheStatus", cached, usage: est.usage ?? 0, quota: est.quota ?? 0 });
 }
 
+async function clearCache(repo?: string) {
+  if (typeof caches === "undefined") return;
+  if (!repo) {
+    await caches.delete(CACHE_NAME);
+    await caches.delete(FILES_CACHE);
+    return;
+  }
+  const prefix = `${KEY_ORIGIN}/${repo}/`;
+  for (const name of [CACHE_NAME, FILES_CACHE]) {
+    const cache = await openCache(name);
+    for (const k of (await cache?.keys()) ?? []) {
+      if (k.url.startsWith(prefix)) await cache!.delete(k);
+    }
+  }
+}
+
 ctx.onmessage = (ev: MessageEvent<WorkerRequest>) => {
   const msg = ev.data;
   if (msg.type === "stop") {
@@ -365,10 +381,7 @@ ctx.onmessage = (ev: MessageEvent<WorkerRequest>) => {
           await cacheStatus(msg.repos);
           break;
         case "clearCache":
-          if (typeof caches !== "undefined") {
-            await caches.delete(CACHE_NAME);
-            await caches.delete(FILES_CACHE);
-          }
+          await clearCache(msg.repo);
           post({ type: "cleared" });
           break;
       }

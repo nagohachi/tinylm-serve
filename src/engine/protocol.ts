@@ -7,7 +7,8 @@ export type WorkerRequest =
   | { type: "stop" }
   | { type: "unload" }
   | { type: "cacheStatus"; repos: string[] }
-  | { type: "clearCache" };
+  /** Deletes cached files of one repo, or everything when `repo` is omitted. */
+  | { type: "clearCache"; repo?: string };
 
 export interface GenerationStats {
   promptTokens: number;

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent, type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import type { GenerationStats } from "./engine/protocol.ts";
 import { DEFAULT_SAMPLING, type SamplingParams } from "./engine/sampler.ts";
 import type { ChatMessage } from "./engine/tokenizer.ts";
@@ -198,7 +198,12 @@ export function App() {
           {!hasWebGPU ? (
             <NoWebGPU />
           ) : showPicker ? (
-            <ModelPicker cached={engine.cached} onPick={switchModel} error={load.error} />
+            <ModelPicker
+              cached={engine.cached}
+              onPick={switchModel}
+              onClearCache={(repo) => engine.clearCache(repo)}
+              error={load.error}
+            />
           ) : (
             <>
               <div
@@ -350,6 +355,7 @@ function Message(props: { m: UiMessage; isLast: boolean; canRegenerate: boolean;
 function ModelPicker(props: {
   cached: Record<string, { bytes: number; complete: boolean }>;
   onPick: (m: ModelEntry) => void;
+  onClearCache: (repo: string) => void;
   error: string | null;
 }) {
   return (
@@ -381,6 +387,9 @@ function ModelPicker(props: {
                 <button type="button" className="primary" onClick={() => props.onPick(m)}>
                   このモデルで始める
                 </button>
+                {(props.cached[m.repo]?.bytes ?? 0) > 0 && (
+                  <ConfirmButton onConfirm={() => props.onClearCache(m.repo)}>キャッシュを削除</ConfirmButton>
+                )}
               </div>
               <a className="card-link" href={`https://huggingface.co/${m.repo}`} target="_blank" rel="noreferrer">
                 {m.repo}
@@ -478,13 +487,30 @@ function SettingsPanel(props: {
 
       <div className="settings-section">
         <h3>キャッシュ</h3>
-        <p className="muted small">
-          ダウンロード済みの重み: {formatBytes(totalCached)}
-          {engine.storage.quota > 0 && `（ブラウザの保存容量 ${formatBytes(engine.storage.usage)} / ${formatBytes(engine.storage.quota)}）`}
-        </p>
-        <button type="button" className="ghost danger" disabled={totalCached === 0} onClick={engine.clearCache}>
-          キャッシュを削除
-        </button>
+        {engine.storage.quota > 0 && (
+          <p className="muted small">
+            ブラウザの保存領域: {formatBytes(engine.storage.usage)} / {formatBytes(engine.storage.quota)}
+          </p>
+        )}
+        <ul className="cache-list">
+          {MODELS.map((m) => {
+            const bytes = engine.cached[m.repo]?.bytes ?? 0;
+            return (
+              <li key={m.id}>
+                <span>
+                  {m.name}
+                  <small className="muted">{bytes > 0 ? formatBytes(bytes) : "なし"}</small>
+                </span>
+                <ConfirmButton disabled={bytes === 0} onConfirm={() => engine.clearCache(m.repo)}>
+                  削除
+                </ConfirmButton>
+              </li>
+            );
+          })}
+        </ul>
+        <ConfirmButton disabled={totalCached === 0} onConfirm={() => engine.clearCache()}>
+          すべて削除
+        </ConfirmButton>
       </div>
       {engine.load.adapter && (
         <div className="settings-section">
@@ -493,6 +519,33 @@ function SettingsPanel(props: {
         </div>
       )}
     </aside>
+  );
+}
+
+/** A delete button that asks for a second click before acting. */
+function ConfirmButton(props: { disabled?: boolean; onConfirm: () => void; children: ReactNode }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+  return (
+    <button
+      type="button"
+      className={`ghost danger ${armed ? "armed" : ""}`}
+      disabled={props.disabled}
+      onClick={() => {
+        if (armed) {
+          setArmed(false);
+          props.onConfirm();
+        } else {
+          setArmed(true);
+        }
+      }}
+    >
+      {armed ? "もう一度押すと削除" : props.children}
+    </button>
   );
 }
 
