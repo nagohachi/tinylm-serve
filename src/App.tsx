@@ -274,7 +274,15 @@ export function App() {
                     </button>
                   )}
                 </form>
-                <p className="fineprint">小さなモデルなので、事実と異なる内容を出力することがあります。</p>
+                <p className="fineprint">
+                  小さなモデルなので、事実と異なる内容を出力することがあります。
+                  {loadedModel?.notice && (
+                    <>
+                      {" "}
+                      <ModelNotice notice={loadedModel.notice} />
+                    </>
+                  )}
+                </p>
               </div>
             </>
           )}
@@ -377,11 +385,20 @@ function ModelPicker(props: {
               <a className="card-link" href={`https://huggingface.co/${m.repo}`} target="_blank" rel="noreferrer">
                 {m.repo}
               </a>
+              {m.notice && <ModelNotice notice={m.notice} />}
             </div>
           );
         })}
       </div>
     </div>
+  );
+}
+
+function ModelNotice({ notice }: { notice: NonNullable<ModelEntry["notice"]> }) {
+  return (
+    <a className="notice" href={notice.href} target="_blank" rel="noreferrer">
+      {notice.text}
+    </a>
   );
 }
 

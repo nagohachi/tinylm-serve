@@ -6,6 +6,8 @@ export interface ModelEntry {
   details: string[];
   /** Fallback size (bytes) of model.safetensors if the Hub API is unreachable. */
   weightBytes: number;
+  /** Attribution the model's license asks us to display. */
+  notice?: { text: string; href: string };
 }
 
 export const MODELS: ModelEntry[] = [
@@ -16,6 +18,18 @@ export const MODELS: ModelEntry[] = [
     summary: "MoE（16 experts から top-3 + shared expert）",
     details: ["総パラメータ 1.46B / アクティブ 480M", "事前学習 10.5B トークン", "コンテキスト長 2048"],
     weightBytes: 2_922_915_008,
+  },
+  {
+    id: "v2-500m",
+    repo: "nagohachi/Llama-3.2-tiny-lm-v2-japanese-500m-sft",
+    name: "tiny-lm v2 500M",
+    summary: "Llama-3.2-3B を枝刈りした Llama 型 dense モデル",
+    details: ["パラメータ 476M", "枝刈り後に約 10B トークンで追加の事前学習", "コンテキスト長 2048"],
+    weightBytes: 952_756_472,
+    notice: {
+      text: "Built with Llama（Llama 3.2 Community License）",
+      href: "https://huggingface.co/nagohachi/Llama-3.2-tiny-lm-v2-japanese-500m-sft/blob/main/LICENSE",
+    },
   },
   {
     id: "v1-500m",
